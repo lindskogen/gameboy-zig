@@ -1,0 +1,9 @@
+.claude/
+
+.zig-cache/
+zig-out/
+
+
+*.gb
+*.bin
+*.ppm
