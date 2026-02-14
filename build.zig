@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
 
     switch (target.result.os.tag) {
         .macos => {
+            exe.addCSourceFile(.{ .file = b.path("src/macos_icon.m"), .flags = &.{"-fobjc-arc"} });
             exe.linkFramework("OpenGL");
             exe.linkFramework("Cocoa");
             exe.linkFramework("IOKit");

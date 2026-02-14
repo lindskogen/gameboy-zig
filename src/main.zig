@@ -17,11 +17,18 @@ const ma = struct {
     extern "c" fn zig_ma_device_get_sample_rate(device: *Device) u32;
 };
 
+const builtin = @import("builtin");
 const Bus = @import("bus.zig").Bus;
 const JoypadInput = @import("bus.zig").JoypadInput;
 const CPU = @import("cpu.zig").CPU;
 const APU = @import("apu.zig").APU;
 const Renderer = @import("renderer.zig").Renderer;
+
+const macos_icon = if (builtin.os.tag == .macos) struct {
+    extern "c" fn setDockIcon(data: [*]const u8, len: c_ulong) void;
+} else struct {};
+
+const icon_png = @embedFile("icon.png");
 
 const SCALE: comptime_int = 4;
 const WIDTH: comptime_int = 160;
@@ -102,6 +109,11 @@ pub fn main() !void {
         return;
     }
     defer glfw.glfwTerminate();
+
+    // Set macOS dock icon
+    if (builtin.os.tag == .macos) {
+        macos_icon.setDockIcon(icon_png.ptr, icon_png.len);
+    }
 
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3);
