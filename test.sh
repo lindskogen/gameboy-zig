@@ -1,31 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run all applicable Mooneye acceptance tests and report results
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE="game-boy-test-roms-v7.0/mooneye-test-suite/acceptance"
+EXPECTED_FILE="$SCRIPT_DIR/test_expected.txt"
 PASS=0
 FAIL=0
-ERRORS=""
+NEW_PASSES=""
+REGRESSIONS=""
+ACTUAL_RESULTS=""
 
-run_test() {
-    local test_path="$1"
-    local output
-    output=$(zig-out/bin/gameboy_zig mooneye "$SUITE/$test_path" 2>&1)
-    local exit_code=$?
-    if [ $exit_code -eq 0 ]; then
-        echo "  PASS  $test_path"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL  $test_path"
-        FAIL=$((FAIL + 1))
-        ERRORS="$ERRORS\n  $output"
-    fi
-}
+GREEN="\033[32m"
+RED="\033[31m"
+YELLOW="\033[33m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+if [ ! -f "$EXPECTED_FILE" ]; then
+    echo -e "${RED}Missing expected results file: $EXPECTED_FILE${RESET}"
+    exit 1
+fi
 
 # Build first
 echo "Building..."
 zig build 2>&1
 if [ $? -ne 0 ]; then
-    echo "Build failed!"
+    echo -e "${RED}Build failed!${RESET}"
     exit 1
 fi
 echo ""
@@ -33,96 +33,54 @@ echo ""
 echo "Running Mooneye acceptance tests..."
 echo ""
 
-# bits
-run_test "bits/mem_oam.gb"
-run_test "bits/reg_f.gb"
-run_test "bits/unused_hwio-GS.gb"
+while read -r test_path expected; do
+    [ -z "$test_path" ] && continue
 
-# boot
-run_test "boot_div-dmgABCmgb.gb"
-run_test "boot_hwio-dmgABCmgb.gb"
-run_test "boot_regs-dmgABC.gb"
+    output=$(zig-out/bin/gameboy_zig mooneye "$SUITE/$test_path" 2>&1)
+    exit_code=$?
 
-# cpu
-run_test "add_sp_e_timing.gb"
-run_test "call_cc_timing.gb"
-run_test "call_cc_timing2.gb"
-run_test "call_timing.gb"
-run_test "call_timing2.gb"
-run_test "di_timing-GS.gb"
-run_test "div_timing.gb"
-run_test "ei_sequence.gb"
-run_test "ei_timing.gb"
-run_test "halt_ime0_ei.gb"
-run_test "halt_ime0_nointr_timing.gb"
-run_test "halt_ime1_timing.gb"
-run_test "halt_ime1_timing2-GS.gb"
-run_test "if_ie_registers.gb"
-run_test "jp_cc_timing.gb"
-run_test "jp_timing.gb"
-run_test "ld_hl_sp_e_timing.gb"
-run_test "pop_timing.gb"
-run_test "push_timing.gb"
-run_test "rapid_di_ei.gb"
-run_test "ret_cc_timing.gb"
-run_test "ret_timing.gb"
-run_test "reti_intr_timing.gb"
-run_test "reti_timing.gb"
-run_test "rst_timing.gb"
-
-# instructions
-run_test "instr/daa.gb"
-
-# interrupts
-run_test "interrupts/ie_push.gb"
-run_test "intr_timing.gb"
-
-# oam_dma
-run_test "oam_dma/basic.gb"
-run_test "oam_dma/reg_read.gb"
-run_test "oam_dma/sources-GS.gb"
-run_test "oam_dma_restart.gb"
-run_test "oam_dma_start.gb"
-run_test "oam_dma_timing.gb"
-
-# ppu
-run_test "ppu/hblank_ly_scx_timing-GS.gb"
-run_test "ppu/intr_1_2_timing-GS.gb"
-run_test "ppu/intr_2_0_timing.gb"
-run_test "ppu/intr_2_mode0_timing.gb"
-run_test "ppu/intr_2_mode0_timing_sprites.gb"
-run_test "ppu/intr_2_mode3_timing.gb"
-run_test "ppu/intr_2_oam_ok_timing.gb"
-run_test "ppu/lcdon_timing-GS.gb"
-run_test "ppu/lcdon_write_timing-GS.gb"
-run_test "ppu/stat_irq_blocking.gb"
-run_test "ppu/stat_lyc_onoff.gb"
-run_test "ppu/vblank_stat_intr-GS.gb"
-
-# serial
-run_test "serial/boot_sclk_align-dmgABCmgb.gb"
-
-# timer
-run_test "timer/div_write.gb"
-run_test "timer/rapid_toggle.gb"
-run_test "timer/tim00.gb"
-run_test "timer/tim00_div_trigger.gb"
-run_test "timer/tim01.gb"
-run_test "timer/tim01_div_trigger.gb"
-run_test "timer/tim10.gb"
-run_test "timer/tim10_div_trigger.gb"
-run_test "timer/tim11.gb"
-run_test "timer/tim11_div_trigger.gb"
-run_test "timer/tima_reload.gb"
-run_test "timer/tima_write_reloading.gb"
-run_test "timer/tma_write_reloading.gb"
+    if [ $exit_code -eq 0 ]; then
+        PASS=$((PASS + 1))
+        ACTUAL_RESULTS="$ACTUAL_RESULTS$test_path pass\n"
+        if [ "$expected" = "pass" ]; then
+            echo -e "  ${GREEN}PASS${RESET}  $test_path"
+        else
+            echo -e "  ${GREEN}${BOLD}PASS${RESET}  $test_path  ${YELLOW}(NEW PASS!)${RESET}"
+            NEW_PASSES="$NEW_PASSES\n    $test_path"
+        fi
+    else
+        FAIL=$((FAIL + 1))
+        ACTUAL_RESULTS="$ACTUAL_RESULTS$test_path fail\n"
+        if [ "$expected" = "fail" ]; then
+            echo -e "  ${RED}FAIL${RESET}  $test_path"
+        else
+            echo -e "  ${RED}${BOLD}FAIL${RESET}  $test_path  ${RED}(REGRESSION!)${RESET}"
+            REGRESSIONS="$REGRESSIONS\n    $test_path"
+        fi
+    fi
+done < "$EXPECTED_FILE"
 
 # Summary
 echo ""
 echo "========================================="
-echo "  Results: $PASS passed, $FAIL failed ($(($PASS + $FAIL)) total)"
+echo -e "  ${GREEN}$PASS passed${RESET}, ${RED}$FAIL failed${RESET} ($(($PASS + $FAIL)) total)"
 echo "========================================="
 
-if [ $FAIL -gt 0 ]; then
+if [ -n "$NEW_PASSES" ]; then
+    echo ""
+    echo -e "  ${GREEN}${BOLD}New passes:${RESET}"
+    echo -e "$NEW_PASSES"
+    echo ""
+    read -p "  Update test_expected.txt? [y/N] " answer
+    if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+        printf "%b" "$ACTUAL_RESULTS" > "$EXPECTED_FILE"
+        echo -e "  ${GREEN}Updated!${RESET}"
+    fi
+fi
+
+if [ -n "$REGRESSIONS" ]; then
+    echo ""
+    echo -e "  ${RED}${BOLD}Regressions:${RESET}"
+    echo -e "$REGRESSIONS"
     exit 1
 fi
