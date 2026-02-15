@@ -3,6 +3,7 @@ const std = @import("std");
 const MBCType = enum {
     no_mbc,
     mbc1,
+    mbc3,
 };
 
 fn romBanks(v: u8) usize {
@@ -34,6 +35,14 @@ pub const Cartridge = struct {
     num_rom_banks: usize = 2,
     num_ram_banks: usize = 0,
     mode: u1 = 0, // 0 = ROM mode, 1 = RAM mode
+    // MBC3 RTC state
+    rtc_register: u8 = 0,
+    rtc_latch: u8 = 0,
+    rtc_s: u8 = 0,
+    rtc_m: u8 = 0,
+    rtc_h: u8 = 0,
+    rtc_dl: u8 = 0,
+    rtc_dh: u8 = 0,
     has_battery: bool = false,
     ram_dirty: bool = false,
 
@@ -48,6 +57,7 @@ pub const Cartridge = struct {
         const mbc: MBCType = switch (cart_type) {
             0x00, 0x08, 0x09 => .no_mbc,
             0x01, 0x02, 0x03 => .mbc1,
+            0x0F, 0x10, 0x11, 0x12, 0x13 => .mbc3,
             else => .no_mbc,
         };
 
@@ -118,6 +128,7 @@ pub const Cartridge = struct {
         return switch (self.mbc_type) {
             .no_mbc => if (address < self.rom.len) self.rom[address] else 0xff,
             .mbc1 => self.mbc1ReadRom(address),
+            .mbc3 => self.mbc3ReadRom(address),
         };
     }
 
@@ -125,6 +136,7 @@ pub const Cartridge = struct {
         return switch (self.mbc_type) {
             .no_mbc => 0x00,
             .mbc1 => self.mbc1ReadRam(@as(usize, addr)),
+            .mbc3 => self.mbc3ReadRam(@as(usize, addr)),
         };
     }
 
@@ -132,6 +144,7 @@ pub const Cartridge = struct {
         switch (self.mbc_type) {
             .no_mbc => {},
             .mbc1 => self.mbc1WriteRom(@as(usize, addr), value),
+            .mbc3 => self.mbc3WriteRom(@as(usize, addr), value),
         }
     }
 
@@ -139,6 +152,7 @@ pub const Cartridge = struct {
         switch (self.mbc_type) {
             .no_mbc => {},
             .mbc1 => self.mbc1WriteRam(@as(usize, addr), value),
+            .mbc3 => self.mbc3WriteRam(@as(usize, addr), value),
         }
     }
 
@@ -194,6 +208,75 @@ pub const Cartridge = struct {
             },
             0x6000...0x7fff => {
                 self.mode = @intCast(value & 0x01);
+            },
+            else => {},
+        }
+    }
+
+    // MBC3 implementation
+
+    fn mbc3ReadRom(self: *const Cartridge, addr: usize) u8 {
+        const bank = if (addr < 0x4000) 0 else self.rom_bank;
+        const idx = bank * 0x4000 | (addr & 0x3fff);
+        return if (idx < self.rom.len) self.rom[idx] else 0xff;
+    }
+
+    fn mbc3ReadRam(self: *const Cartridge, addr: usize) u8 {
+        if (!self.ram_on) return 0xff;
+        if (self.rtc_register <= 3) {
+            const idx = @as(usize, self.rtc_register) * 0x2000 | (addr & 0x1fff);
+            return if (idx < self.ram_len) self.ram[idx] else 0xff;
+        }
+        return switch (self.rtc_register) {
+            0x08 => self.rtc_s,
+            0x09 => self.rtc_m,
+            0x0A => self.rtc_h,
+            0x0B => self.rtc_dl,
+            0x0C => self.rtc_dh,
+            else => 0xff,
+        };
+    }
+
+    fn mbc3WriteRam(self: *Cartridge, addr: usize, value: u8) void {
+        if (!self.ram_on) return;
+        if (self.rtc_register <= 3) {
+            const idx = @as(usize, self.rtc_register) * 0x2000 | (addr & 0x1fff);
+            if (idx < self.ram_len) {
+                self.ram[idx] = value;
+                self.ram_dirty = true;
+            }
+            return;
+        }
+        switch (self.rtc_register) {
+            0x08 => self.rtc_s = value,
+            0x09 => self.rtc_m = value,
+            0x0A => self.rtc_h = value,
+            0x0B => self.rtc_dl = value,
+            0x0C => self.rtc_dh = value,
+            else => {},
+        }
+    }
+
+    fn mbc3WriteRom(self: *Cartridge, addr: usize, value: u8) void {
+        switch (addr) {
+            0x0000...0x1fff => {
+                self.ram_on = (value & 0xf) == 0xa;
+            },
+            0x2000...0x3fff => {
+                const bank = @as(usize, value) & 0x7f;
+                self.rom_bank = (if (bank == 0) 1 else bank) % self.num_rom_banks;
+            },
+            0x4000...0x5fff => {
+                self.rtc_register = value;
+                if (value <= 3) {
+                    self.ram_bank = @as(usize, value);
+                }
+            },
+            0x6000...0x7fff => {
+                if (self.rtc_latch == 0 and value == 1) {
+                    // Latch RTC (no-op since we don't advance RTC)
+                }
+                self.rtc_latch = value;
             },
             else => {},
         }
