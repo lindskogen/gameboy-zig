@@ -59,6 +59,8 @@ const Joypad = struct {
 
 const Serial = struct {
     value: u8 = 0,
+    log: [256]u8 = undefined,
+    log_len: usize = 0,
 
     fn readByte(self: *const Serial, addr: u16) u8 {
         _ = self;
@@ -75,6 +77,10 @@ const Serial = struct {
                 if ((v & 0x80) != 0) {
                     // Transfer requested — print for debug
                     std.debug.print("{c}", .{self.value});
+                    if (self.log_len < self.log.len) {
+                        self.log[self.log_len] = self.value;
+                        self.log_len += 1;
+                    }
                 }
             },
             else => {},

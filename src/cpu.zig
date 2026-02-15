@@ -31,6 +31,7 @@ pub const CPU = struct {
     cycles: u32 = 0,
 
     halted: bool = false,
+    halted_at_breakpoint: bool = false,
     interrupt_master_enable: bool = false,
     ei_pending: bool = false,
 
@@ -1515,6 +1516,7 @@ pub const CPU = struct {
         const op = self.readByte(self.pc);
         self.pc +%= 1;
         opcode_table[op](self);
+        if (op == 0x40) self.halted_at_breakpoint = true;
         return self.cycles;
     }
 };

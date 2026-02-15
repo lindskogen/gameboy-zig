@@ -227,6 +227,13 @@ pub fn main() !void {
         return;
     }
 
+    // Headless Mooneye test runner mode
+    if (args.len > 2 and std.mem.eql(u8, args[1], "mooneye")) {
+        const rom_name = args[2];
+        const pass = runMooneye(rom_name);
+        std.process.exit(if (pass) 0 else 1);
+    }
+
     // Headless WAV capture mode
     if (args.len > 2 and std.mem.eql(u8, args[1], "wav")) {
         const rom_name = args[2];
@@ -542,4 +549,70 @@ fn runWavCapture(allocator: std.mem.Allocator, rom_name: []const u8, num_frames:
     try w.interface.flush();
 
     std.debug.print("WAV saved to output.wav ({d} frames, {d} samples)\n", .{ frames, num_samples });
+}
+
+fn runMooneye(rom_name: []const u8) bool {
+    var rom_buffer: [1024 * 1024]u8 = undefined;
+    const rom_data = std.fs.cwd().readFile(rom_name, &rom_buffer) catch |err| {
+        std.debug.print("Failed to load ROM: {}\n", .{err});
+        return false;
+    };
+
+    var bus = Bus.initWithRom(rom_data, null);
+    var cpu = CPU{};
+    cpu.bus = &bus;
+    cpu.skipBootRom();
+
+    // Run until LD B,B breakpoint or timeout (~7200 frames ≈ 120s emulated)
+    const max_frames: u32 = 7200;
+    var frames: u32 = 0;
+    while (frames < max_frames) {
+        const elapsed = cpu.next();
+        if (bus.ppu.next(elapsed)) {
+            frames += 1;
+        }
+        for (0..elapsed) |_| {
+            bus.apu.tick();
+        }
+        if (cpu.halted_at_breakpoint) break;
+    }
+
+    // Extract test name from ROM path
+    const test_name = extractTestName(rom_name);
+
+    // Check Fibonacci sequence: B=3, C=5, D=8, E=13, H=21, L=34
+    const pass = cpu.b == 3 and cpu.c == 5 and cpu.d == 8 and cpu.e == 13 and cpu.h == 21 and cpu.l == 34;
+
+    if (pass) {
+        std.debug.print("PASS: {s}\n", .{test_name});
+    } else if (!cpu.halted_at_breakpoint) {
+        std.debug.print("FAIL: {s} (timeout after {d} frames)\n", .{ test_name, max_frames });
+    } else {
+        std.debug.print("FAIL: {s} (B={X:0>2} C={X:0>2} D={X:0>2} E={X:0>2} H={X:0>2} L={X:0>2})\n", .{ test_name, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l });
+    }
+
+    // Print serial output if any
+    if (bus.serial.log_len > 0) {
+        std.debug.print("Serial: {s}\n", .{bus.serial.log[0..bus.serial.log_len]});
+    }
+
+    return pass;
+}
+
+fn extractTestName(path: []const u8) []const u8 {
+    // Try to extract path after "acceptance/"
+    if (std.mem.indexOf(u8, path, "acceptance/")) |idx| {
+        const after = path[idx + "acceptance/".len ..];
+        // Strip .gb extension
+        if (std.mem.endsWith(u8, after, ".gb")) {
+            return after[0 .. after.len - 3];
+        }
+        return after;
+    }
+    // Fallback: just the filename without extension
+    const base = if (std.mem.lastIndexOf(u8, path, "/")) |idx| path[idx + 1 ..] else path;
+    if (std.mem.endsWith(u8, base, ".gb")) {
+        return base[0 .. base.len - 3];
+    }
+    return base;
 }
