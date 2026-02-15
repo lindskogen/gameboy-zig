@@ -135,6 +135,8 @@ pub const PPU = struct {
 
     win_y_trigger: bool = false,
     wc: i32 = 0, // window internal line counter
+    stat_line: bool = false, // STAT IRQ line for rising-edge detection
+    mode3_duration: u32 = 172, // mode 3 duration varies with SCX
 
     // Timer registers
     div: u8 = 0,
@@ -190,17 +192,36 @@ pub const PPU = struct {
         switch (addr) {
             0x8000...0x9fff => self.vram[addr & 0x1fff] = value,
             0xfe00...0xfe9f => self.oam[addr - 0xfe00] = value,
-            0xff40 => self.lcdc = @bitCast(value),
+            0xff40 => {
+                const old_enable = self.lcdc.lcd_display_enable;
+                self.lcdc = @bitCast(value);
+                if (!old_enable and self.lcdc.lcd_display_enable) {
+                    self.ly = 0;
+                    self.cycles = 0;
+                    self.stat.mode = .oam_read;
+                    self.stat_line = false;
+                    self.updateStatInterrupt();
+                } else if (old_enable and !self.lcdc.lcd_display_enable) {
+                    self.ly = 0;
+                    self.cycles = 0;
+                    self.stat.mode = .hblank;
+                    self.stat_line = false;
+                }
+            },
             0xff41 => {
                 self.stat.enable_ly_interrupt = (value & 0x40) != 0;
                 self.stat.enable_m2_interrupt = (value & 0x20) != 0;
                 self.stat.enable_m1_interrupt = (value & 0x10) != 0;
                 self.stat.enable_m0_interrupt = (value & 0x08) != 0;
+                self.updateStatInterrupt();
             },
             0xff42 => self.scy = value,
             0xff43 => self.scx = value,
             0xff44 => self.ly = value,
-            0xff45 => self.lc = value,
+            0xff45 => {
+                self.lc = value;
+                self.updateStatInterrupt();
+            },
             0xff47 => self.bgp = value,
             0xff48 => self.pal0 = value,
             0xff49 => self.pal1 = value,
@@ -255,6 +276,23 @@ pub const PPU = struct {
         }
     }
 
+    fn computeStatLine(self: *const PPU) bool {
+        if (!self.lcdc.lcd_display_enable) return false;
+        if (self.stat.enable_m0_interrupt and self.stat.mode == .hblank) return true;
+        if (self.stat.enable_m1_interrupt and self.stat.mode == .vblank) return true;
+        if (self.stat.enable_m2_interrupt and self.stat.mode == .oam_read) return true;
+        if (self.stat.enable_ly_interrupt and self.ly == self.lc) return true;
+        return false;
+    }
+
+    fn updateStatInterrupt(self: *PPU) void {
+        const new_line = self.computeStatLine();
+        if (new_line and !self.stat_line) {
+            self.interrupt_flag.insert(.{ .lcd_stat = true });
+        }
+        self.stat_line = new_line;
+    }
+
     fn checkWindowY(self: *PPU) void {
         if (!self.lcdc.lcd_display_enable) return;
 
@@ -284,34 +322,29 @@ pub const PPU = struct {
 
                 if (self.cycles >= 80) {
                     self.cycles -= 80;
+                    self.mode3_duration = 172 + (@as(u32, self.scx) % 8);
                     self.stat.mode = .transfer;
+                    self.updateStatInterrupt();
                 }
             },
             .transfer => {
-                if (self.cycles >= 172) {
-                    self.cycles -= 172;
+                if (self.cycles >= self.mode3_duration) {
+                    self.cycles -= self.mode3_duration;
                     self.stat.mode = .hblank;
-                    if (self.stat.enable_m0_interrupt) {
-                        self.interrupt_flag.insert(.{ .lcd_stat = true });
-                    }
+                    self.updateStatInterrupt();
                     self.renderLine();
                 }
             },
             .hblank => {
-                if (self.cycles >= 204) {
-                    self.cycles -= 204;
+                const hblank_duration = 456 - 80 - self.mode3_duration;
+                if (self.cycles >= hblank_duration) {
+                    self.cycles -= hblank_duration;
                     self.ly += 1;
-
-                    if (self.stat.enable_ly_interrupt and self.ly == self.lc) {
-                        self.interrupt_flag.insert(.{ .lcd_stat = true });
-                    }
 
                     if (self.ly == 144) {
                         self.stat.mode = .vblank;
                         self.interrupt_flag.insert(.{ .vblank = true });
-                        if (self.stat.enable_m1_interrupt) {
-                            self.interrupt_flag.insert(.{ .lcd_stat = true });
-                        }
+                        self.updateStatInterrupt();
                         should_render = true;
                     } else {
                         // Set ly_for_comparison: 0 for line 0, null for others initially
@@ -320,9 +353,7 @@ pub const PPU = struct {
                         self.checkWindowY();
 
                         self.stat.mode = .oam_read;
-                        if (self.stat.enable_m2_interrupt) {
-                            self.interrupt_flag.insert(.{ .lcd_stat = true });
-                        }
+                        self.updateStatInterrupt();
                     }
                 }
             },
@@ -331,9 +362,7 @@ pub const PPU = struct {
                     self.cycles -= 456;
                     self.ly += 1;
 
-                    if (self.stat.enable_ly_interrupt and self.ly == self.lc) {
-                        self.interrupt_flag.insert(.{ .lcd_stat = true });
-                    }
+                    self.updateStatInterrupt();
 
                     if (self.ly > 153) {
                         self.interrupt_flag.remove(.{ .vblank = true });
@@ -346,9 +375,7 @@ pub const PPU = struct {
                         self.checkWindowY();
 
                         self.stat.mode = .oam_read;
-                        if (self.stat.enable_m2_interrupt) {
-                            self.interrupt_flag.insert(.{ .lcd_stat = true });
-                        }
+                        self.updateStatInterrupt();
                     }
                 }
             },
@@ -585,6 +612,10 @@ pub const PPU = struct {
 
         // Write dmg_colors
         try writer.writeByte(if (self.dmg_colors) 1 else 0);
+
+        // Write STAT line and mode3 duration
+        try writer.writeByte(if (self.stat_line) 1 else 0);
+        try writer.writeInt(u32, self.mode3_duration, .little);
     }
 
     pub fn deserialize(self: *PPU, reader: anytype) !void {
@@ -640,5 +671,9 @@ pub const PPU = struct {
 
         // Read dmg_colors
         self.dmg_colors = (try reader.readByte()) != 0;
+
+        // Read STAT line and mode3 duration
+        self.stat_line = (try reader.readByte()) != 0;
+        self.mode3_duration = try reader.readInt(u32, .little);
     }
 };
