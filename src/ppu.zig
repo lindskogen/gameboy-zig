@@ -532,4 +532,113 @@ pub const PPU = struct {
             self.wc += 1;
         }
     }
+
+    pub fn serialize(self: *const PPU, writer: anytype) !void {
+        // Write VRAM and OAM
+        try writer.writeAll(&self.vram);
+        try writer.writeAll(&self.oam);
+
+        // Write registers
+        try writer.writeInt(u8, @bitCast(self.lcdc), .little);
+        try writer.writeInt(u8, self.scy, .little);
+        try writer.writeInt(u8, self.scx, .little);
+        try writer.writeInt(u8, self.wy, .little);
+        try writer.writeInt(u8, self.wx, .little);
+        try writer.writeInt(u8, self.ly, .little);
+        try writer.writeInt(u8, self.lc, .little);
+        try writer.writeInt(u8, self.bgp, .little);
+        try writer.writeInt(u8, self.pal0, .little);
+        try writer.writeInt(u8, self.pal1, .little);
+
+        // Write stat
+        try writer.writeByte(if (self.stat.enable_ly_interrupt) 1 else 0);
+        try writer.writeByte(if (self.stat.enable_m2_interrupt) 1 else 0);
+        try writer.writeByte(if (self.stat.enable_m1_interrupt) 1 else 0);
+        try writer.writeByte(if (self.stat.enable_m0_interrupt) 1 else 0);
+        try writer.writeInt(u8, @intFromEnum(self.stat.mode), .little);
+
+        // Write timing state
+        try writer.writeInt(u32, self.cycles, .little);
+        try writer.writeInt(u32, self.div_cycles, .little);
+        try writer.writeInt(u32, self.timer_clock, .little);
+
+        // Write timer registers
+        try writer.writeInt(u8, self.div, .little);
+        try writer.writeInt(u8, self.tima_counter, .little);
+        try writer.writeInt(u8, self.tma_modulo, .little);
+        try writer.writeInt(u8, self.tac, .little);
+
+        // Write window state
+        try writer.writeByte(if (self.win_y_trigger) 1 else 0);
+        try writer.writeInt(i32, self.wc, .little);
+
+        // Write ly_for_comparison
+        if (self.ly_for_comparison) |lyc| {
+            try writer.writeByte(1);
+            try writer.writeInt(u8, lyc, .little);
+        } else {
+            try writer.writeByte(0);
+        }
+
+        // Write interrupt_flag
+        try writer.writeInt(u8, @bitCast(self.interrupt_flag), .little);
+
+        // Write dmg_colors
+        try writer.writeByte(if (self.dmg_colors) 1 else 0);
+    }
+
+    pub fn deserialize(self: *PPU, reader: anytype) !void {
+        // Read VRAM and OAM
+        try reader.readNoEof(&self.vram);
+        try reader.readNoEof(&self.oam);
+
+        // Read registers
+        self.lcdc = @bitCast(try reader.readInt(u8, .little));
+        self.scy = try reader.readInt(u8, .little);
+        self.scx = try reader.readInt(u8, .little);
+        self.wy = try reader.readInt(u8, .little);
+        self.wx = try reader.readInt(u8, .little);
+        self.ly = try reader.readInt(u8, .little);
+        self.lc = try reader.readInt(u8, .little);
+        self.bgp = try reader.readInt(u8, .little);
+        self.pal0 = try reader.readInt(u8, .little);
+        self.pal1 = try reader.readInt(u8, .little);
+
+        // Read stat
+        self.stat.enable_ly_interrupt = (try reader.readByte()) != 0;
+        self.stat.enable_m2_interrupt = (try reader.readByte()) != 0;
+        self.stat.enable_m1_interrupt = (try reader.readByte()) != 0;
+        self.stat.enable_m0_interrupt = (try reader.readByte()) != 0;
+        const mode_val = try reader.readInt(u8, .little);
+        self.stat.mode = @enumFromInt(@as(u2, @truncate(mode_val)));
+
+        // Read timing state
+        self.cycles = try reader.readInt(u32, .little);
+        self.div_cycles = try reader.readInt(u32, .little);
+        self.timer_clock = try reader.readInt(u32, .little);
+
+        // Read timer registers
+        self.div = try reader.readInt(u8, .little);
+        self.tima_counter = try reader.readInt(u8, .little);
+        self.tma_modulo = try reader.readInt(u8, .little);
+        self.tac = try reader.readInt(u8, .little);
+
+        // Read window state
+        self.win_y_trigger = (try reader.readByte()) != 0;
+        self.wc = try reader.readInt(i32, .little);
+
+        // Read ly_for_comparison
+        const has_lyc = (try reader.readByte()) != 0;
+        if (has_lyc) {
+            self.ly_for_comparison = try reader.readInt(u8, .little);
+        } else {
+            self.ly_for_comparison = null;
+        }
+
+        // Read interrupt_flag
+        self.interrupt_flag = @bitCast(try reader.readInt(u8, .little));
+
+        // Read dmg_colors
+        self.dmg_colors = (try reader.readByte()) != 0;
+    }
 };

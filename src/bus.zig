@@ -188,4 +188,40 @@ pub const Bus = struct {
             else => {},
         }
     }
+
+    pub fn serialize(self: *const Bus, writer: anytype) !void {
+        // Write WRAM and ZRAM
+        try writer.writeAll(&self.wram);
+        try writer.writeAll(&self.zram);
+
+        // Write boot ROM state
+        try writer.writeByte(if (self.boot_rom_disabled) 1 else 0);
+        try writer.writeInt(u64, @intCast(self.wram_bank), .little);
+
+        // Write interrupt enable
+        try writer.writeInt(u8, @bitCast(self.interrupt_enable), .little);
+
+        // Write joypad state
+        const joypad_mode: u8 = if (self.input.mode == .action) 0 else 1;
+        try writer.writeInt(u8, joypad_mode, .little);
+        try writer.writeInt(u8, @bitCast(self.input.input), .little);
+    }
+
+    pub fn deserialize(self: *Bus, reader: anytype) !void {
+        // Read WRAM and ZRAM
+        try reader.readNoEof(&self.wram);
+        try reader.readNoEof(&self.zram);
+
+        // Read boot ROM state
+        self.boot_rom_disabled = (try reader.readByte()) != 0;
+        self.wram_bank = @intCast(try reader.readInt(u64, .little));
+
+        // Read interrupt enable
+        self.interrupt_enable = @bitCast(try reader.readInt(u8, .little));
+
+        // Read joypad state
+        const joypad_mode = try reader.readInt(u8, .little);
+        self.input.mode = if (joypad_mode == 0) .action else .direction;
+        self.input.input = @bitCast(try reader.readInt(u8, .little));
+    }
 };

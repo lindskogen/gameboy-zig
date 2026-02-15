@@ -88,6 +88,24 @@ const VolumeEnvelope = struct {
         self.period = 0;
         self.volume = 0;
     }
+
+    pub fn serialize(self: *const VolumeEnvelope, writer: anytype) !void {
+        try writer.writeInt(u8, self.timer, .little);
+        try writer.writeInt(u8, self.period, .little);
+        try writer.writeByte(if (self.add_mode) 1 else 0);
+        try writer.writeInt(u8, self.starting_volume, .little);
+        try writer.writeInt(u8, self.volume, .little);
+        try writer.writeByte(if (self.finished) 1 else 0);
+    }
+
+    pub fn deserialize(self: *VolumeEnvelope, reader: anytype) !void {
+        self.timer = try reader.readInt(u8, .little);
+        self.period = try reader.readInt(u8, .little);
+        self.add_mode = (try reader.readByte()) != 0;
+        self.starting_volume = try reader.readInt(u8, .little);
+        self.volume = try reader.readInt(u8, .little);
+        self.finished = (try reader.readByte()) != 0;
+    }
 };
 
 // ─── Length Counter ──────────────────────────────────────────────────────────
@@ -147,6 +165,20 @@ const LengthCounter = struct {
     fn powerOff(self: *LengthCounter) void {
         self.enabled = false;
         self.frame_sequencer = 0;
+    }
+
+    pub fn serialize(self: *const LengthCounter, writer: anytype) !void {
+        try writer.writeByte(if (self.enabled) 1 else 0);
+        try writer.writeInt(u8, self.length, .little);
+        try writer.writeInt(u8, self.full_length, .little);
+        try writer.writeInt(u8, self.frame_sequencer, .little);
+    }
+
+    pub fn deserialize(self: *LengthCounter, reader: anytype) !void {
+        self.enabled = (try reader.readByte()) != 0;
+        self.length = try reader.readInt(u8, .little);
+        self.full_length = try reader.readInt(u8, .little);
+        self.frame_sequencer = try reader.readInt(u8, .little);
     }
 };
 
@@ -250,6 +282,30 @@ const FrequencySweep = struct {
         self.period = 0;
         self.negate = false;
         self.shift = 0;
+    }
+
+    pub fn serialize(self: *const FrequencySweep, writer: anytype) !void {
+        try writer.writeByte(if (self.enabled) 1 else 0);
+        try writer.writeByte(if (self.overflow) 1 else 0);
+        try writer.writeByte(if (self.has_negated) 1 else 0);
+        try writer.writeInt(u8, self.timer, .little);
+        try writer.writeInt(u16, self.frequency, .little);
+        try writer.writeInt(u16, self.shadow_frequency, .little);
+        try writer.writeInt(u8, self.period, .little);
+        try writer.writeByte(if (self.negate) 1 else 0);
+        try writer.writeInt(u8, self.shift, .little);
+    }
+
+    pub fn deserialize(self: *FrequencySweep, reader: anytype) !void {
+        self.enabled = (try reader.readByte()) != 0;
+        self.overflow = (try reader.readByte()) != 0;
+        self.has_negated = (try reader.readByte()) != 0;
+        self.timer = try reader.readInt(u8, .little);
+        self.frequency = try reader.readInt(u16, .little);
+        self.shadow_frequency = try reader.readInt(u16, .little);
+        self.period = try reader.readInt(u8, .little);
+        self.negate = (try reader.readByte()) != 0;
+        self.shift = try reader.readInt(u8, .little);
     }
 };
 
@@ -361,6 +417,30 @@ const Channel1 = struct {
         self.sequence = 0;
         self.duty = 0;
     }
+
+    pub fn serialize(self: *const Channel1, writer: anytype) !void {
+        try writer.writeByte(if (self.ch_enabled) 1 else 0);
+        try writer.writeByte(if (self.dac_enabled) 1 else 0);
+        try writer.writeInt(u8, self.output, .little);
+        try self.length_counter.serialize(writer);
+        try writer.writeInt(u8, self.duty, .little);
+        try writer.writeInt(u32, self.timer, .little);
+        try writer.writeInt(u64, @intCast(self.sequence), .little);
+        try self.volume_envelope.serialize(writer);
+        try self.frequency_sweep.serialize(writer);
+    }
+
+    pub fn deserialize(self: *Channel1, reader: anytype) !void {
+        self.ch_enabled = (try reader.readByte()) != 0;
+        self.dac_enabled = (try reader.readByte()) != 0;
+        self.output = try reader.readInt(u8, .little);
+        try self.length_counter.deserialize(reader);
+        self.duty = try reader.readInt(u8, .little);
+        self.timer = try reader.readInt(u32, .little);
+        self.sequence = @intCast(try reader.readInt(u64, .little));
+        try self.volume_envelope.deserialize(reader);
+        try self.frequency_sweep.deserialize(reader);
+    }
 };
 
 // ─── Channel 2 (Pulse) ──────────────────────────────────────────────────────
@@ -455,6 +535,30 @@ const Channel2 = struct {
         self.sequence = 0;
         self.frequency = 0;
         self.duty = 0;
+    }
+
+    pub fn serialize(self: *const Channel2, writer: anytype) !void {
+        try writer.writeByte(if (self.ch_enabled) 1 else 0);
+        try writer.writeByte(if (self.dac_enabled) 1 else 0);
+        try writer.writeInt(u8, self.output, .little);
+        try self.length_counter.serialize(writer);
+        try writer.writeInt(u8, self.duty, .little);
+        try writer.writeInt(u32, self.timer, .little);
+        try writer.writeInt(u64, @intCast(self.sequence), .little);
+        try writer.writeInt(u32, self.frequency, .little);
+        try self.volume_envelope.serialize(writer);
+    }
+
+    pub fn deserialize(self: *Channel2, reader: anytype) !void {
+        self.ch_enabled = (try reader.readByte()) != 0;
+        self.dac_enabled = (try reader.readByte()) != 0;
+        self.output = try reader.readInt(u8, .little);
+        try self.length_counter.deserialize(reader);
+        self.duty = try reader.readInt(u8, .little);
+        self.timer = try reader.readInt(u32, .little);
+        self.sequence = @intCast(try reader.readInt(u64, .little));
+        self.frequency = try reader.readInt(u32, .little);
+        try self.volume_envelope.deserialize(reader);
     }
 };
 
@@ -592,6 +696,34 @@ const Channel3 = struct {
         self.ticks_since_read = 0;
         self.last_address = 0;
     }
+
+    pub fn serialize(self: *const Channel3, writer: anytype) !void {
+        try writer.writeByte(if (self.ch_enabled) 1 else 0);
+        try writer.writeByte(if (self.dac_enabled) 1 else 0);
+        try writer.writeInt(u8, self.output, .little);
+        try self.length_counter.serialize(writer);
+        try writer.writeInt(u32, self.timer, .little);
+        try writer.writeInt(u64, @intCast(self.position), .little);
+        try writer.writeInt(u32, self.ticks_since_read, .little);
+        try writer.writeInt(u32, self.frequency, .little);
+        try writer.writeInt(u8, self.volume_code, .little);
+        try writer.writeInt(u64, @intCast(self.last_address), .little);
+        try writer.writeAll(&self.wave_table);
+    }
+
+    pub fn deserialize(self: *Channel3, reader: anytype) !void {
+        self.ch_enabled = (try reader.readByte()) != 0;
+        self.dac_enabled = (try reader.readByte()) != 0;
+        self.output = try reader.readInt(u8, .little);
+        try self.length_counter.deserialize(reader);
+        self.timer = try reader.readInt(u32, .little);
+        self.position = @intCast(try reader.readInt(u64, .little));
+        self.ticks_since_read = try reader.readInt(u32, .little);
+        self.frequency = try reader.readInt(u32, .little);
+        self.volume_code = try reader.readInt(u8, .little);
+        self.last_address = @intCast(try reader.readInt(u64, .little));
+        try reader.readNoEof(&self.wave_table);
+    }
 };
 
 // ─── Channel 4 (Noise) ──────────────────────────────────────────────────────
@@ -693,6 +825,32 @@ const Channel4 = struct {
         self.clock_shift = 0;
         self.width_mode = false;
         self.divisor_code = 0;
+    }
+
+    pub fn serialize(self: *const Channel4, writer: anytype) !void {
+        try writer.writeByte(if (self.ch_enabled) 1 else 0);
+        try writer.writeByte(if (self.dac_enabled) 1 else 0);
+        try writer.writeInt(u8, self.output, .little);
+        try self.length_counter.serialize(writer);
+        try writer.writeInt(u32, self.timer, .little);
+        try writer.writeInt(u8, self.clock_shift, .little);
+        try writer.writeByte(if (self.width_mode) 1 else 0);
+        try writer.writeInt(u8, self.divisor_code, .little);
+        try writer.writeInt(u16, self.lfsr, .little);
+        try self.volume_envelope.serialize(writer);
+    }
+
+    pub fn deserialize(self: *Channel4, reader: anytype) !void {
+        self.ch_enabled = (try reader.readByte()) != 0;
+        self.dac_enabled = (try reader.readByte()) != 0;
+        self.output = try reader.readInt(u8, .little);
+        try self.length_counter.deserialize(reader);
+        self.timer = try reader.readInt(u32, .little);
+        self.clock_shift = try reader.readInt(u8, .little);
+        self.width_mode = (try reader.readByte()) != 0;
+        self.divisor_code = try reader.readInt(u8, .little);
+        self.lfsr = try reader.readInt(u16, .little);
+        try self.volume_envelope.deserialize(reader);
     }
 };
 
@@ -891,5 +1049,53 @@ pub const APU = struct {
             0xff25 => self.channel_enabled = @bitCast(v),
             else => {},
         }
+    }
+
+    pub fn serialize(self: *const APU, writer: anytype) !void {
+        try writer.writeByte(if (self.enabled) 1 else 0);
+        try writer.writeByte(if (self.vin_left_enable) 1 else 0);
+        try writer.writeByte(if (self.vin_right_enable) 1 else 0);
+        try writer.writeInt(u8, self.left_volume, .little);
+        try writer.writeInt(u8, self.right_volume, .little);
+        try writer.writeInt(u8, @bitCast(self.channel_enabled), .little);
+        try writer.writeInt(u32, self.frame_sequencer_counter, .little);
+        try writer.writeInt(u8, self.frame_sequencer, .little);
+
+        // Serialize channels
+        try self.channel1.serialize(writer);
+        try self.channel2.serialize(writer);
+        try self.channel3.serialize(writer);
+        try self.channel4.serialize(writer);
+
+        // Serialize sampler state (skip ring_buffer)
+        try writer.writeInt(u32, self.sample_clock, .little);
+        try writer.writeAll(&std.mem.toBytes(self.cycles_per_sample));
+        try writer.writeAll(&std.mem.toBytes(self.sample_counter));
+    }
+
+    pub fn deserialize(self: *APU, reader: anytype) !void {
+        self.enabled = (try reader.readByte()) != 0;
+        self.vin_left_enable = (try reader.readByte()) != 0;
+        self.vin_right_enable = (try reader.readByte()) != 0;
+        self.left_volume = try reader.readInt(u8, .little);
+        self.right_volume = try reader.readInt(u8, .little);
+        self.channel_enabled = @bitCast(try reader.readInt(u8, .little));
+        self.frame_sequencer_counter = try reader.readInt(u32, .little);
+        self.frame_sequencer = try reader.readInt(u8, .little);
+
+        // Deserialize channels
+        try self.channel1.deserialize(reader);
+        try self.channel2.deserialize(reader);
+        try self.channel3.deserialize(reader);
+        try self.channel4.deserialize(reader);
+
+        // Deserialize sampler state (skip ring_buffer)
+        self.sample_clock = try reader.readInt(u32, .little);
+        var cycles_bytes: [@sizeOf(f32)]u8 = undefined;
+        try reader.readNoEof(&cycles_bytes);
+        self.cycles_per_sample = std.mem.bytesToValue(f32, &cycles_bytes);
+        var counter_bytes: [@sizeOf(f32)]u8 = undefined;
+        try reader.readNoEof(&counter_bytes);
+        self.sample_counter = std.mem.bytesToValue(f32, &counter_bytes);
     }
 };

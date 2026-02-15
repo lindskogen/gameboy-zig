@@ -49,6 +49,60 @@ pub const CPU = struct {
         self.pc = 0x0100;
     }
 
+    pub fn serialize(self: *const CPU, writer: anytype) !void {
+        try writer.writeAll(&[_]u8{self.a});
+        try writer.writeAll(&[_]u8{self.b});
+        try writer.writeAll(&[_]u8{self.c});
+        try writer.writeAll(&[_]u8{self.d});
+        try writer.writeAll(&[_]u8{self.e});
+        try writer.writeAll(&[_]u8{@bitCast(self.f)});
+        try writer.writeAll(&[_]u8{self.h});
+        try writer.writeAll(&[_]u8{self.l});
+        try writer.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, self.pc)));
+        try writer.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, self.sp)));
+        try writer.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, self.cycles)));
+        try writer.writeAll(&[_]u8{if (self.halted) 1 else 0});
+        try writer.writeAll(&[_]u8{if (self.interrupt_master_enable) 1 else 0});
+        try writer.writeAll(&[_]u8{if (self.ei_pending) 1 else 0});
+    }
+
+    pub fn deserialize(self: *CPU, reader: anytype) !void {
+        var buf: [1]u8 = undefined;
+        try reader.readNoEof(&buf);
+        self.a = buf[0];
+        try reader.readNoEof(&buf);
+        self.b = buf[0];
+        try reader.readNoEof(&buf);
+        self.c = buf[0];
+        try reader.readNoEof(&buf);
+        self.d = buf[0];
+        try reader.readNoEof(&buf);
+        self.e = buf[0];
+        try reader.readNoEof(&buf);
+        self.f = @bitCast(buf[0]);
+        try reader.readNoEof(&buf);
+        self.h = buf[0];
+        try reader.readNoEof(&buf);
+        self.l = buf[0];
+
+        var buf16: [2]u8 = undefined;
+        try reader.readNoEof(&buf16);
+        self.pc = std.mem.littleToNative(u16, std.mem.bytesToValue(u16, &buf16));
+        try reader.readNoEof(&buf16);
+        self.sp = std.mem.littleToNative(u16, std.mem.bytesToValue(u16, &buf16));
+
+        var buf32: [4]u8 = undefined;
+        try reader.readNoEof(&buf32);
+        self.cycles = std.mem.littleToNative(u32, std.mem.bytesToValue(u32, &buf32));
+
+        try reader.readNoEof(&buf);
+        self.halted = buf[0] != 0;
+        try reader.readNoEof(&buf);
+        self.interrupt_master_enable = buf[0] != 0;
+        try reader.readNoEof(&buf);
+        self.ei_pending = buf[0] != 0;
+    }
+
     // ── Comptime register read/write ────────────────────────────────
 
     fn readReg(self: *CPU, comptime r: Reg) u8 {

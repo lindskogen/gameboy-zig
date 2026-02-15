@@ -45,6 +45,175 @@ fn audioCallback(_: ?*anyopaque, output: ?*anyopaque, _: ?*const anyopaque, fram
 
 var audio_apu_ptr: ?*anyopaque = null;
 
+const gc = if (builtin.os.tag == .macos) struct {
+    const GamepadState = extern struct {
+        a: c_int = 0,
+        b: c_int = 0,
+        x: c_int = 0,
+        y: c_int = 0,
+        start: c_int = 0,
+        select: c_int = 0,
+        dpad_up: c_int = 0,
+        dpad_down: c_int = 0,
+        dpad_left: c_int = 0,
+        dpad_right: c_int = 0,
+        l_shoulder: c_int = 0,
+        r_shoulder: c_int = 0,
+        left_x: f32 = 0,
+        left_y: f32 = 0,
+        connected: c_int = 0,
+    };
+    extern "c" fn pollMacOSGamepad(state: *GamepadState) void;
+    extern "c" fn getControllerName() ?[*:0]const u8;
+} else struct {};
+
+var gamepad_logged: bool = false;
+
+fn pollGamepad(input: *JoypadInput) void {
+    if (builtin.os.tag == .macos) {
+        // Use native Game Controller framework on macOS
+        // (GLFW's joystick backend can't read Bluetooth controller buttons)
+        var state = gc.GamepadState{};
+        gc.pollMacOSGamepad(&state);
+        if (state.connected == 0) return;
+
+        if (!gamepad_logged) {
+            gamepad_logged = true;
+            if (gc.getControllerName()) |name_ptr| {
+                const name = std.mem.span(name_ptr);
+                std.debug.print("Controller connected: {s}\n", .{name});
+            }
+        }
+
+        if (state.a != 0) input.a = true;
+        if (state.b != 0) input.b = true;
+        if (state.x != 0) input.a = true;
+        if (state.y != 0) input.b = true;
+        if (state.start != 0) input.start = true;
+        if (state.select != 0) input.select = true;
+        if (state.dpad_up != 0) input.up = true;
+        if (state.dpad_down != 0) input.down = true;
+        if (state.dpad_left != 0) input.left = true;
+        if (state.dpad_right != 0) input.right = true;
+
+        // Left stick as D-Pad
+        if (state.left_x < -0.5) input.left = true;
+        if (state.left_x > 0.5) input.right = true;
+        if (state.left_y < -0.5) input.down = true;
+        if (state.left_y > 0.5) input.up = true;
+    } else {
+        // Non-macOS: use GLFW gamepad API
+        var jid: c_int = glfw.GLFW_JOYSTICK_1;
+        while (jid <= glfw.GLFW_JOYSTICK_LAST) : (jid += 1) {
+            if (glfw.glfwJoystickPresent(jid) == 0) continue;
+            if (glfw.glfwJoystickIsGamepad(jid) == 0) continue;
+
+            var state: glfw.GLFWgamepadstate = undefined;
+            if (glfw.glfwGetGamepadState(jid, &state) == 0) continue;
+
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_A] != 0) input.a = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_B] != 0) input.b = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_X] != 0) input.a = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_Y] != 0) input.b = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_START] != 0) input.start = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_BACK] != 0) input.select = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_DPAD_UP] != 0) input.up = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_DPAD_DOWN] != 0) input.down = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_DPAD_LEFT] != 0) input.left = true;
+            if (state.buttons[glfw.GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] != 0) input.right = true;
+            return;
+        }
+    }
+}
+
+fn getStatePath(allocator: std.mem.Allocator, rom_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.state", .{rom_path});
+}
+
+fn saveState(cpu: *CPU, bus: *Bus, rom_path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const state_path = try getStatePath(allocator, rom_path);
+    const file = try std.fs.cwd().createFile(state_path, .{});
+    defer file.close();
+
+    var write_buf: [4096]u8 = undefined;
+    var writer = file.writer(&write_buf);
+
+    // Write header
+    try writer.interface.writeAll("GBZS");
+    try writer.interface.writeAll(&[_]u8{ 0x01, 0, 0, 0 }); // version + reserved
+
+    // Write component blocks with size prefixes
+    try writeComponent(&writer.interface, cpu);
+    try writeComponent(&writer.interface, &bus.ppu);
+    try writeComponent(&writer.interface, &bus.apu);
+    try writeComponent(&writer.interface, bus);
+    try writeComponent(&writer.interface, &bus.cartridge);
+
+    try writer.interface.flush();
+    std.debug.print("State saved to {s}\n", .{state_path});
+}
+
+fn loadState(cpu: *CPU, bus: *Bus, rom_path: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const state_path = try getStatePath(allocator, rom_path);
+    const file = try std.fs.cwd().openFile(state_path, .{});
+    defer file.close();
+
+    const file_data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
+    var fbs = std.io.fixedBufferStream(file_data);
+    const reader = fbs.reader();
+
+    // Validate header
+    var magic: [4]u8 = undefined;
+    try reader.readNoEof(&magic);
+    if (!std.mem.eql(u8, &magic, "GBZS")) return error.InvalidMagic;
+
+    var header: [4]u8 = undefined;
+    try reader.readNoEof(&header);
+    const version = header[0];
+    if (version != 0x01) return error.UnsupportedVersion;
+
+    // Read component blocks
+    try readComponent(reader, cpu);
+    try readComponent(reader, &bus.ppu);
+    try readComponent(reader, &bus.apu);
+    try readComponent(reader, bus);
+    try readComponent(reader, &bus.cartridge);
+
+    std.debug.print("State loaded from {s}\n", .{state_path});
+}
+
+fn writeComponent(writer: anytype, component: anytype) !void {
+    var count_buf: [100 * 1024]u8 = undefined;
+    var count_stream = std.io.fixedBufferStream(&count_buf);
+    var count_writer = count_stream.writer();
+
+    try component.serialize(&count_writer);
+    const size: u32 = @intCast(count_stream.pos);
+
+    // Write size (as 4 bytes)
+    const size_bytes = std.mem.toBytes(std.mem.nativeToLittle(u32, size));
+    try writer.writeAll(&size_bytes);
+
+    // Write component data
+    try component.serialize(writer);
+}
+
+fn readComponent(reader: anytype, component: anytype) !void {
+    var size_bytes: [4]u8 = undefined;
+    try reader.readNoEof(&size_bytes);
+    const size = std.mem.littleToNative(u32, std.mem.bytesToValue(u32, &size_bytes));
+    _ = size; // Could validate if needed
+    try component.deserialize(reader);
+}
+
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const args = try std.process.argsAlloc(allocator);
@@ -98,6 +267,9 @@ pub fn main() !void {
     var bus = Bus.initWithRom(rom_data, boot_rom);
     var cpu = CPU{};
     cpu.bus = &bus;
+
+    // Load battery-backed save data
+    bus.cartridge.loadSav(rom_name);
 
     if (boot_rom == null) {
         cpu.skipBootRom();
@@ -168,6 +340,8 @@ pub fn main() !void {
     var emu_time_acc: i64 = 0;
     var title_buf: [96]u8 = undefined;
     var prev_crt_key: bool = false;
+    var prev_save_key: bool = false;
+    var prev_load_key: bool = false;
     var next_frame: f64 = @floatFromInt(std.time.milliTimestamp());
     // Game Boy: ~59.7275 Hz
     const frame_duration: f64 = 1000.0 / 59.7275;
@@ -185,6 +359,24 @@ pub fn main() !void {
         }
         prev_crt_key = crt_key;
 
+        // Save state (F5)
+        const save_key = glfw.glfwGetKey(window, glfw.GLFW_KEY_F5) == glfw.GLFW_PRESS;
+        if (save_key and !prev_save_key) {
+            saveState(&cpu, &bus, rom_name) catch |err| {
+                std.debug.print("Save state failed: {}\n", .{err});
+            };
+        }
+        prev_save_key = save_key;
+
+        // Load state (F9)
+        const load_key = glfw.glfwGetKey(window, glfw.GLFW_KEY_F9) == glfw.GLFW_PRESS;
+        if (load_key and !prev_load_key) {
+            loadState(&cpu, &bus, rom_name) catch |err| {
+                std.debug.print("Load state failed: {}\n", .{err});
+            };
+        }
+        prev_load_key = load_key;
+
         // Update joypad
         var input = JoypadInput{};
         if (glfw.glfwGetKey(window, glfw.GLFW_KEY_Z) == glfw.GLFW_PRESS) input.a = true;
@@ -196,6 +388,10 @@ pub fn main() !void {
         if (glfw.glfwGetKey(window, glfw.GLFW_KEY_DOWN) == glfw.GLFW_PRESS) input.down = true;
         if (glfw.glfwGetKey(window, glfw.GLFW_KEY_LEFT) == glfw.GLFW_PRESS) input.left = true;
         if (glfw.glfwGetKey(window, glfw.GLFW_KEY_RIGHT) == glfw.GLFW_PRESS) input.right = true;
+
+        // Poll gamepad (adds to keyboard input)
+        pollGamepad(&input);
+
         bus.input.update(input);
 
         const emu_start = std.time.milliTimestamp();
@@ -244,6 +440,9 @@ pub fn main() !void {
             next_frame = @floatFromInt(now);
         }
     }
+
+    // Save battery-backed RAM on exit
+    bus.cartridge.saveSav(rom_name);
 }
 
 fn runScreenshot(allocator: std.mem.Allocator, rom_name: []const u8, num_frames: u32) !void {

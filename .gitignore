@@ -7,6 +7,8 @@ game-boy-test-roms-v7.0/
 
 
 *.gb
+*.gb.*
+*.sav
 *.bin
 *.ppm
 *.png
