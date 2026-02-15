@@ -110,8 +110,9 @@ pub const Bus = struct {
             @memcpy(bus.boot_rom[0..len], br[0..len]);
         } else {
             bus.boot_rom_disabled = true;
-            // Initialize LCDC when skipping boot ROM
-            bus.ppu.writeVram(0xff40, 0x91);
+            // Initialize PPU registers when skipping boot ROM
+            bus.ppu.writeVram(0xff40, 0x91); // LCDC
+            bus.ppu.writeVram(0xff47, 0xFC); // BGP (standard DMG palette)
         }
 
         return bus;

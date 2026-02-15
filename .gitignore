@@ -3,7 +3,10 @@
 .zig-cache/
 zig-out/
 
+game-boy-test-roms-v7.0/
+
 
 *.gb
 *.bin
 *.ppm
+*.png
