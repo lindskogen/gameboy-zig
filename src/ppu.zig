@@ -139,15 +139,15 @@ pub const PPU = struct {
     mode3_duration: u32 = 172, // mode 3 duration varies with SCX
 
     // Timer registers
-    div: u8 = 0,
     tima_counter: u8 = 0,
     tma_modulo: u8 = 0,
     tac: u8 = 0,
+    internal_counter: u16 = 0, // 16-bit counter; DIV = upper 8 bits
+    prev_timer_bit: bool = false, // for falling-edge detection
+    tima_overflow_countdown: u8 = 0, // counts down T-cycles until TMA reload (0 = no pending reload)
 
     // Cycle counters
     cycles: u32 = 0,
-    div_cycles: u32 = 0,
-    timer_clock: u32 = 0,
 
     interrupt_flag: InterruptFlags = .{},
 
@@ -179,11 +179,11 @@ pub const PPU = struct {
             0xff4a => self.wy,
             0xff4b => self.wx,
             0xff4f => 0xfe,
-            0xff04 => self.div,
+            0xff04 => @truncate(self.internal_counter >> 8),
             0xff05 => self.tima_counter,
             0xff06 => self.tma_modulo,
             0xff07 => self.tac,
-            0xff0f => @bitCast(self.interrupt_flag),
+            0xff0f => @as(u8, @bitCast(self.interrupt_flag)) | 0xE0,
             else => 0xff,
         };
     }
@@ -229,50 +229,90 @@ pub const PPU = struct {
             0xff4b => self.wx = value,
             0xff4f => {}, // VRAM bank (CGB only)
             0xff04 => {
-                self.div_cycles = 0;
-                self.div = 0;
+                // Writing any value to DIV resets the entire internal counter
+                // This can cause a falling edge on the timer bit
+                const old_bit = self.timerBit();
+                self.internal_counter = 0;
+                const new_bit = self.timerBit();
+                if (old_bit and !new_bit) {
+                    self.incrementTima();
+                }
+                self.prev_timer_bit = new_bit;
             },
-            0xff05 => self.tima_counter = value,
-            0xff06 => self.tma_modulo = value,
-            0xff07 => self.tac = value,
+            0xff05 => {
+                // Writing to TIMA during the overflow delay cancels the reload and interrupt
+                if (self.tima_overflow_countdown > 0) {
+                    self.tima_overflow_countdown = 0;
+                }
+                self.tima_counter = value;
+            },
+            0xff06 => {
+                self.tma_modulo = value;
+                // Writing TMA during the reload cycle also updates TIMA
+                if (self.tima_overflow_countdown == 1) {
+                    self.tima_counter = value;
+                }
+            },
+            0xff07 => {
+                // Changing TAC can cause a falling edge on the AND gate
+                const old_bit = self.timerBit();
+                self.tac = value;
+                const new_bit = self.timerBit();
+                if (old_bit and !new_bit) {
+                    self.incrementTima();
+                }
+                self.prev_timer_bit = new_bit;
+            },
             0xff68, 0xff69, 0xff6a, 0xff6b => {}, // CGB only
             0xff0f => self.interrupt_flag = @bitCast(value),
             else => {},
         }
     }
 
-    fn updateDiv(self: *PPU, elapsed: u32) void {
-        self.div_cycles += elapsed;
-        while (self.div_cycles >= 256) {
-            self.div_cycles -= 256;
-            self.div +%= 1;
+    fn timerBitIndex(self: *const PPU) u4 {
+        return switch (self.tac & 0b11) {
+            0 => 9,
+            1 => 3,
+            2 => 5,
+            3 => 7,
+            else => unreachable,
+        };
+    }
+
+    fn timerBit(self: *const PPU) bool {
+        const timer_enabled = (self.tac & 0x04) != 0;
+        if (!timer_enabled) return false;
+        return (self.internal_counter >> self.timerBitIndex()) & 1 == 1;
+    }
+
+    fn incrementTima(self: *PPU) void {
+        const result = @addWithOverflow(self.tima_counter, 1);
+        self.tima_counter = result[0];
+        if (result[1] != 0) {
+            // Overflow: TIMA stays at 0 for 1 M-cycle (4 T-cycles), then TMA is loaded
+            self.tima_overflow_countdown = 4;
         }
     }
 
     fn handleTimer(self: *PPU, elapsed: u32) void {
-        self.updateDiv(elapsed);
-
-        const timer_enabled = (self.tac & 0x04) != 0;
-        if (!timer_enabled) return;
-
-        self.timer_clock += elapsed;
-
-        const step: u32 = switch (self.tac & 0b11) {
-            1 => 16,
-            2 => 64,
-            3 => 256,
-            else => 1024,
-        };
-
-        while (self.timer_clock >= step) {
-            self.timer_clock -= step;
-
-            const result = @addWithOverflow(self.tima_counter, 1);
-            self.tima_counter = result[0];
-            if (result[1] != 0) {
-                self.tima_counter = self.tma_modulo;
-                self.interrupt_flag.insert(.{ .timer = true });
+        // Increment internal counter one T-cycle at a time for accurate edge detection
+        for (0..elapsed) |_| {
+            // Process TIMA overflow reload (delayed by 1 M-cycle = 4 T-cycles)
+            if (self.tima_overflow_countdown > 0) {
+                self.tima_overflow_countdown -= 1;
+                if (self.tima_overflow_countdown == 0) {
+                    self.tima_counter = self.tma_modulo;
+                    self.interrupt_flag.insert(.{ .timer = true });
+                }
             }
+
+            self.internal_counter +%= 1;
+            const new_bit = self.timerBit();
+            // TIMA increments on falling edge of (selected_bit AND timer_enable)
+            if (self.prev_timer_bit and !new_bit) {
+                self.incrementTima();
+            }
+            self.prev_timer_bit = new_bit;
         }
     }
 
@@ -586,11 +626,13 @@ pub const PPU = struct {
 
         // Write timing state
         try writer.writeInt(u32, self.cycles, .little);
-        try writer.writeInt(u32, self.div_cycles, .little);
-        try writer.writeInt(u32, self.timer_clock, .little);
+        try writer.writeInt(u16, self.internal_counter, .little);
+        // padding to maintain alignment (was div_cycles u32 + timer_clock u32 = 8 bytes, now internal_counter u16 = 2 bytes, need 6 more)
+        try writer.writeInt(u16, 0, .little);
+        try writer.writeInt(u32, 0, .little);
 
-        // Write timer registers
-        try writer.writeInt(u8, self.div, .little);
+        // Write timer registers (was: div u8, now: prev_timer_bit u8)
+        try writer.writeInt(u8, if (self.prev_timer_bit) 1 else 0, .little);
         try writer.writeInt(u8, self.tima_counter, .little);
         try writer.writeInt(u8, self.tma_modulo, .little);
         try writer.writeInt(u8, self.tac, .little);
@@ -645,11 +687,12 @@ pub const PPU = struct {
 
         // Read timing state
         self.cycles = try reader.readInt(u32, .little);
-        self.div_cycles = try reader.readInt(u32, .little);
-        self.timer_clock = try reader.readInt(u32, .little);
+        self.internal_counter = try reader.readInt(u16, .little);
+        _ = try reader.readInt(u16, .little); // padding
+        _ = try reader.readInt(u32, .little); // padding
 
         // Read timer registers
-        self.div = try reader.readInt(u8, .little);
+        self.prev_timer_bit = (try reader.readByte()) != 0;
         self.tima_counter = try reader.readInt(u8, .little);
         self.tma_modulo = try reader.readInt(u8, .little);
         self.tac = try reader.readInt(u8, .little);

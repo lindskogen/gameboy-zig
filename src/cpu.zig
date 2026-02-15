@@ -1320,6 +1320,7 @@ pub const CPU = struct {
 
     fn execDI(self: *CPU) void {
         self.interrupt_master_enable = false;
+        self.ei_pending = false;
         self.cycles = 4;
     }
 
