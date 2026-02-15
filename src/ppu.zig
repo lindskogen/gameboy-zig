@@ -128,6 +128,7 @@ pub const PPU = struct {
     wx: u8 = 0,
     ly: u8 = 0,
     lc: u8 = 0, // LYC
+    ly_for_comparison: ?u8 = null,
     bgp: u8 = 0,
     pal0: u8 = 0, // OBP0
     pal1: u8 = 0, // OBP1
@@ -254,6 +255,17 @@ pub const PPU = struct {
         }
     }
 
+    fn checkWindowY(self: *PPU) void {
+        if (!self.lcdc.lcd_display_enable) return;
+
+        // Use ly_for_comparison if it's set, otherwise use current ly
+        const comparison = self.ly_for_comparison orelse self.ly;
+
+        if (self.lcdc.window_display_enable and self.wy == comparison) {
+            self.win_y_trigger = true;
+        }
+    }
+
     pub fn next(self: *PPU, elapsed: u32) bool {
         self.cycles += elapsed;
         self.handleTimer(elapsed);
@@ -264,9 +276,12 @@ pub const PPU = struct {
 
         switch (self.stat.mode) {
             .oam_read => {
-                if (self.ly >= self.wy) {
-                    self.win_y_trigger = true;
+                // During OAM mode, set ly_for_comparison to actual ly and check again
+                if (self.cycles >= 40 and self.ly_for_comparison == null) {
+                    self.ly_for_comparison = self.ly;
+                    self.checkWindowY();
                 }
+
                 if (self.cycles >= 80) {
                     self.cycles -= 80;
                     self.stat.mode = .transfer;
@@ -299,6 +314,11 @@ pub const PPU = struct {
                         }
                         should_render = true;
                     } else {
+                        // Set ly_for_comparison: 0 for line 0, null for others initially
+                        self.ly_for_comparison = if (self.ly == 0) 0 else null;
+                        // First window Y check (before Mode 2)
+                        self.checkWindowY();
+
                         self.stat.mode = .oam_read;
                         if (self.stat.enable_m2_interrupt) {
                             self.interrupt_flag.insert(.{ .lcd_stat = true });
@@ -317,13 +337,18 @@ pub const PPU = struct {
 
                     if (self.ly > 153) {
                         self.interrupt_flag.remove(.{ .vblank = true });
+                        self.ly = 0;
+                        self.wc = 0;
+                        self.win_y_trigger = false;
+
+                        // Set ly_for_comparison to 0 for line 0
+                        self.ly_for_comparison = 0;
+                        self.checkWindowY();
+
                         self.stat.mode = .oam_read;
                         if (self.stat.enable_m2_interrupt) {
                             self.interrupt_flag.insert(.{ .lcd_stat = true });
                         }
-                        self.ly = 0;
-                        self.wc = 0;
-                        self.win_y_trigger = false;
                     }
                 }
             },
@@ -488,7 +513,7 @@ pub const PPU = struct {
             const index = @as(usize, y) * SCREEN_W + xi;
 
             if (self.lcdc.window_display_enable and self.win_y_trigger and !win_x_trigger) {
-                win_x_trigger = self.wx > 0 and x + 7 >= @as(u16, self.wx);
+                win_x_trigger = x + 7 >= @as(u16, self.wx);
             }
 
             var pixel = self.drawBgPixel(x, y, win_x_trigger);
