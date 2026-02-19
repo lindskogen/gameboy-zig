@@ -30,7 +30,7 @@ const Joypad = struct {
         self.input = input;
     }
 
-    fn readByte(self: *const Joypad) u8 {
+    pub fn readByte(self: *const Joypad) u8 {
         var output: u8 = 0x0f; // all buttons released (active low)
         if (self.mode == .action) {
             if (self.input.start) output &= ~@as(u8, 0x08);

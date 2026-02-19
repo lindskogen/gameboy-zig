@@ -23,6 +23,7 @@ const JoypadInput = @import("bus.zig").JoypadInput;
 const CPU = @import("cpu.zig").CPU;
 const APU = @import("apu.zig").APU;
 const Renderer = @import("renderer.zig").Renderer;
+const bess = @import("bess.zig");
 
 const macos_icon = if (builtin.os.tag == .macos) struct {
     extern "c" fn setDockIcon(data: [*]const u8, len: c_ulong) void;
@@ -142,17 +143,7 @@ fn saveState(cpu: *CPU, bus: *Bus, rom_path: []const u8) !void {
     var write_buf: [4096]u8 = undefined;
     var writer = file.writer(&write_buf);
 
-    // Write header
-    try writer.interface.writeAll("GBZS");
-    try writer.interface.writeAll(&[_]u8{ 0x01, 0, 0, 0 }); // version + reserved
-
-    // Write component blocks with size prefixes
-    try writeComponent(&writer.interface, cpu);
-    try writeComponent(&writer.interface, &bus.ppu);
-    try writeComponent(&writer.interface, &bus.apu);
-    try writeComponent(&writer.interface, bus);
-    try writeComponent(&writer.interface, &bus.cartridge);
-
+    try bess.write(&writer.interface, cpu, bus);
     try writer.interface.flush();
     std.debug.print("State saved to {s}\n", .{state_path});
 }
@@ -166,52 +157,18 @@ fn loadState(cpu: *CPU, bus: *Bus, rom_path: []const u8) !void {
     const file = try std.fs.cwd().openFile(state_path, .{});
     defer file.close();
 
-    const file_data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
-    var fbs = std.io.fixedBufferStream(file_data);
-    const reader = fbs.reader();
+    const file_data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
 
-    // Validate header
-    var magic: [4]u8 = undefined;
-    try reader.readNoEof(&magic);
-    if (!std.mem.eql(u8, &magic, "GBZS")) return error.InvalidMagic;
-
-    var header: [4]u8 = undefined;
-    try reader.readNoEof(&header);
-    const version = header[0];
-    if (version != 0x01) return error.UnsupportedVersion;
-
-    // Read component blocks
-    try readComponent(reader, cpu);
-    try readComponent(reader, &bus.ppu);
-    try readComponent(reader, &bus.apu);
-    try readComponent(reader, bus);
-    try readComponent(reader, &bus.cartridge);
+    bess.read(file_data, cpu, bus) catch |err| {
+        if (err == error.LegacyFormat) {
+            std.debug.print("Legacy GBZS format not supported, please re-save\n", .{});
+        } else if (err == error.RomMismatch) {
+            std.debug.print("Save state is for a different ROM\n", .{});
+        }
+        return err;
+    };
 
     std.debug.print("State loaded from {s}\n", .{state_path});
-}
-
-fn writeComponent(writer: anytype, component: anytype) !void {
-    var count_buf: [100 * 1024]u8 = undefined;
-    var count_stream = std.io.fixedBufferStream(&count_buf);
-    var count_writer = count_stream.writer();
-
-    try component.serialize(&count_writer);
-    const size: u32 = @intCast(count_stream.pos);
-
-    // Write size (as 4 bytes)
-    const size_bytes = std.mem.toBytes(std.mem.nativeToLittle(u32, size));
-    try writer.writeAll(&size_bytes);
-
-    // Write component data
-    try component.serialize(writer);
-}
-
-fn readComponent(reader: anytype, component: anytype) !void {
-    var size_bytes: [4]u8 = undefined;
-    try reader.readNoEof(&size_bytes);
-    const size = std.mem.littleToNative(u32, std.mem.bytesToValue(u32, &size_bytes));
-    _ = size; // Could validate if needed
-    try component.deserialize(reader);
 }
 
 pub fn main() !void {

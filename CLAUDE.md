@@ -91,4 +91,4 @@ sips -s format png framebuffer.ppm --out framebuffer.png
 
 - macOS: Objective-C files for dock icon (`macos_icon.m`) and GameController framework (`macos_gamepad.m`)
 - Vendor directory: `vendor/glad/` (OpenGL loader), `vendor/miniaudio.{c,h}` (audio)
-- Save states: Custom "GBZS" binary format with per-component serialization blocks (F5 save, F9 load)
+- Save states: [BESS](https://github.com/LIJI32/SameBoy/blob/master/BESS.md) format for cross-emulator compatibility (F5 save, F9 load). Implementation in `src/bess.zig`.

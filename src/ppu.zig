@@ -279,7 +279,7 @@ pub const PPU = struct {
         };
     }
 
-    fn timerBit(self: *const PPU) bool {
+    pub fn timerBit(self: *const PPU) bool {
         const timer_enabled = (self.tac & 0x04) != 0;
         if (!timer_enabled) return false;
         return (self.internal_counter >> self.timerBitIndex()) & 1 == 1;
@@ -316,7 +316,7 @@ pub const PPU = struct {
         }
     }
 
-    fn computeStatLine(self: *const PPU) bool {
+    pub fn computeStatLine(self: *const PPU) bool {
         if (!self.lcdc.lcd_display_enable) return false;
         if (self.stat.enable_m0_interrupt and self.stat.mode == .hblank) return true;
         if (self.stat.enable_m1_interrupt and self.stat.mode == .vblank) return true;
