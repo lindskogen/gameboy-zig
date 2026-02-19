@@ -40,9 +40,13 @@ Game Boy DMG emulator.
 
 ## Zig Patterns Used
 
+Always prefer idiomatic Zig patterns. Use `std.mem` functions (`readInt`, `writeInt`, `asBytes`, `sliceAsBytes`, `toBytes`) over manual byte manipulation. Use `extern struct` with comptime size assertions for binary format layouts. Use `@bitCast`, `@intFromBool`, packed structs, and comptime features where they reduce boilerplate.
+
 - **Packed structs** for hardware registers (Flags, InterruptFlags, JoypadInput) — enables direct `@bitCast` with hardware values.
+- **Extern structs** for binary format layouts (BESS save state) — with `comptime` size assertions.
 - **Comptime metaprogramming** for CPU instruction table — `Reg` enum + template functions generate all register-to-register operation handlers at compile time.
 - **Minimal allocation** — fixed-size arrays throughout, `page_allocator` only for CLI args.
+- **Zig 0.15 writer interface** — `file.writer(&buf)` returns a buffered writer; the actual writer methods are on `.interface` (e.g. `writer.interface.writeAll(...)`, `writer.interface.flush()`).
 
 ## Mooneye Test Suite
 

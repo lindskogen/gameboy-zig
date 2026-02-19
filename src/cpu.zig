@@ -143,19 +143,19 @@ pub const CPU = struct {
 
     // ── Register pairs ──────────────────────────────────────────────
 
-    fn getAF(self: *const CPU) u16 {
+    pub fn getAF(self: *const CPU) u16 {
         return (@as(u16, self.a) << 8) | @as(u16, @as(u8, @bitCast(self.f)));
     }
 
-    fn getBC(self: *const CPU) u16 {
+    pub fn getBC(self: *const CPU) u16 {
         return (@as(u16, self.b) << 8) | @as(u16, self.c);
     }
 
-    fn getDE(self: *const CPU) u16 {
+    pub fn getDE(self: *const CPU) u16 {
         return (@as(u16, self.d) << 8) | @as(u16, self.e);
     }
 
-    fn getHL(self: *const CPU) u16 {
+    pub fn getHL(self: *const CPU) u16 {
         return (@as(u16, self.h) << 8) | @as(u16, self.l);
     }
 
